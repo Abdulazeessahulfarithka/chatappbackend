@@ -1,4 +1,5 @@
-import { validate, User, generateAuthToken } from "../models/user.js";
+import { validate, generateAuthToken, User } from "../Models/user.js";
+// Example import statement
 import jwt from "jsonwebtoken";
 import joi from "joi";
 import bcrypt from "bcrypt";
