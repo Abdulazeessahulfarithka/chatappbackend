@@ -1,127 +1,74 @@
 import express from "express";
 import * as dotenv from "dotenv";
-dotenv.config();
-import { MongoClient } from "mongodb";
-import cors from "cors";
-import userRouter from "./routes/user.routes.js";
+import connectDB from "./Config/db.js";
 import { Server } from "socket.io";
-import http from "http";
+import { authRouter } from "./routes/auth.js";
+import { chatRouter } from "./routes/chat.js";
+import { messageRouter } from "./routes/message.js";
 
+// envrionment config
+dotenv.config();
+
+// intialzing the server
 const app = express();
-app.use(cors());
+const PORT = process.env.PORT;
 
-export const client = new MongoClient(process.env.MONGO_URL);
-await client.connect();
-console.log("mongo connected");
+// database connection
+connectDB();
 
-// const expressServer = app.listen(process.env.PORT, () =>
-//   console.log("exp server started in PORT", process.env.PORT)
-// );
+// middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-// const io = new Server(expressServer);
-
-const httpServer = http.createServer(app);
-const io = new Server(httpServer, {
-  cors: { origin: process.env.CLIENT_API, methods: ["GET", "POST"] },
+// Home page
+app.get("/", function (request, response) {
+  response.send("<h1>app is working<h1>").status(200);
 });
+// app.listen(PORT, () => {
+//   console.log("app is working");
+// });
 
-httpServer.listen(process.env.PORT, () =>
-  console.log("http server started in PORT", process.env.PORT)
-);
+//routes
+app.use("/api", authRouter);
+app.use("/api", chatRouter);
+app.use("/api",messageRouter)
 
-app.get("/", (request, response) => {
-  response.send("Welcome to Chat API");
-});
-
-app.get("/roomMessages", async (request, response) => {
-  try {
-    const room = request.headers.selectedroom;
-
-    const messages = await getRoomMessages(room);
-    // console.log("messsss", messages);
-    response.send({
-      message: "Messages Updated",
-      payload: { messages: messages },
-    });
-  } catch (err) {
-    console.log("ERROR", err);
-    response.status(500).send({ message: err.message });
+const io = new Server(
+  app.listen(PORT, () => console.log("server is connected 7002")),
+  {
+    pingTimeout: 600000,
+    cors: {
+      origin: "http://localhost:7002",
+    },
   }
-});
-
-const updateOnlineStatus = async (userMail, userStatus, socketId) => {
-  await client
-    .db("chatApp")
-    .collection("users")
-    .updateOne(
-      { isActivated: true, email: userMail },
-      { $set: { isOnline: userStatus, socketId: socketId } }
-    );
-};
-
-const updateOfflineStatus = async (userStatus, socketId) => {
-  await client
-    .db("chatApp")
-    .collection("users")
-    .updateOne(
-      { isActivated: true, socketId: socketId },
-      { $set: { isOnline: userStatus, lastSeen: Date.now() } }
-    );
-};
-
-const getRoomMessages = async (room) => {
-  return await client
-    .db("chatApp")
-    .collection("messages")
-    .find({ to: room })
-    .toArray();
-};
-
-const saveMessage = async (data) => {
-  await client.db("chatApp").collection("messages").insertOne(data);
-};
-
-io.on("connection", async (socket) => {
-  // save every connecting in online users
-  // console.log("a user conn in socket ID", socket.id);
-  socket.on("new_user", async (userMail) => {
-    await updateOnlineStatus(userMail, true, socket.id);
-    const all = await client
-      .db("chatApp")
-      .collection("users")
-      .find(
-        { isActivated: true },
-        { projection: { password: 0, isActivated: 0 } }
-      )
-      .toArray();
-    // console.log("all", all);
-    socket.emit("updated_users", all);
+);
+io.on("connection", (socket) => {
+  console.log("connected in socket.io");
+  socket.io("setup", () => {
+    socket.json(userData._id);
+    socket.emit("connected");
   });
 
-  socket.on("join_room", async (room) => {
+  socket.on("join chat", (room) => {
     socket.join(room);
-    // console.log("joined Room", room);
-    socket.emit("room_messages", await getRoomMessages(room));
+    console.log("join room" + room);
   });
 
-  socket.on("message_room", async (data) => {
-    // console.log("new message to room", data);
-    await saveMessage(data);
-    io.to(data.to).emit(
-      "receive_room_messages",
-      await getRoomMessages(data.to)
-    );
-    // console.log("emited Data room messages", await getRoomMessages(data.to));
+  socket.on("typing", (room) => socket.in(room).emit("typing"));
+  socket.on("stop typing", (room) => socket.in(room).emit("stop typing"));
+
+  socket.on("new message", (newMessageReceived) => {
+    var chat = newMessageReceived.chat;
+    if (!chat.users) return console.log("chat.not found");
+
+    chat.users.forEach((user) => {
+      if (user._id == newMessageReceived.sender._id)
+        return socket.in(user._id).emit("message received", newMessageReceived);
+    });
   });
 
-  socket.on("disconnect", async function () {
-    // console.log("A user disconnected", socket.id);
-    await updateOfflineStatus(false, socket.id);
-  });
-
-  socket.on("connect_error", (error) => {
-    console.log("connection error", error);
+  socket.off("setup", () => {
+    console.log("user disconnected");
+    socket.leave(userData._id);
   });
 });
-
-app.use("/user", userRouter);
